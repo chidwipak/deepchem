@@ -691,6 +691,16 @@ CosineSchedule
 .. autoclass:: deepchem.models.torch_models.rfdiffusion.CosineSchedule
   :members:
 
+ChemCeptionLayer
+----------------
+.. autoclass:: deepchem.models.torch_models.ChemCeptionLayer
+  :members:
+
+ChemCeption
+----------------
+.. autoclass:: deepchem.models.torch_models.ChemCeption
+  :members:
+
 PyTorch Lightning Models
 ========================
 
@@ -783,9 +793,4 @@ DistributedTrainer
 ------------------
 
 .. autoclass:: deepchem.trainer.DistributedTrainer
-  :members:
-
-ChemCeption
-----------------
-.. autoclass:: deepchem.models.torch_models.ChemCeption.ChemCeption
   :members:
