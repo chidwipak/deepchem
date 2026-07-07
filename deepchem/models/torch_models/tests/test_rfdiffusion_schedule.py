@@ -5,7 +5,7 @@ import pytest
 try:
     import torch
     import torch.nn.functional as F
-    from deepchem.models.torch_models.rfdiffusion import CosineSchedule
+    from deepchem.models.torch_models.layers import CosineSchedule
     has_torch = True
 except ImportError:
     has_torch = False

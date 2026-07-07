@@ -4,7 +4,7 @@ import pytest
 
 try:
     import torch
-    from deepchem.models.torch_models.rfdiffusion import (
+    from deepchem.models.torch_models.layers import (
         PositionalEncoding,
         ResidueEmbedding,
         SinusoidalTimestepEmbedding,
