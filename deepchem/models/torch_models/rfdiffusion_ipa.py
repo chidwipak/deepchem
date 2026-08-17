@@ -34,13 +34,14 @@ try:
     import torch
     import torch.nn as nn
     import torch.nn.functional as F
-except ModuleNotFoundError:
-    raise ImportError('rfdiffusion_ipa requires PyTorch to be installed.')
-
-from deepchem.models.torch_models.rfdiffusion_frames import (
-    apply_inverse_rigid,
-    apply_rigid,
-)
+    from deepchem.models.torch_models.rfdiffusion_frames import (
+        apply_inverse_rigid,
+        apply_rigid,
+    )
+except (ModuleNotFoundError, ImportError):
+    raise ImportError(
+        'rfdiffusion_ipa requires PyTorch and rfdiffusion_frames to be installed.'
+    )
 
 
 class InvariantPointAttention(nn.Module):
