@@ -47,16 +47,6 @@ try:
 except ModuleNotFoundError:
     raise ImportError('rfdiffusion_contigs requires NumPy to be installed.')
 
-__all__ = [
-    'LinkerSegment',
-    'MotifSegment',
-    'ContigMap',
-    'RealisedContig',
-    'parse_contig_string',
-    'build_motif_mask',
-    'freeze_motif_coords',
-]
-
 _MOTIF_RE = re.compile(r'^([A-Za-z])(-?\d+)-(-?\d+)$')
 _LINKER_RE = re.compile(r'^(\d+)-(\d+)$')
 _FIXED_LINKER_RE = re.compile(r'^(\d+)$')
@@ -330,6 +320,20 @@ def build_motif_mask(realised: RealisedContig,
         If a motif refers to a chain not present in ``reference_coords``.
     IndexError
         If a motif residue index is out of range for its chain.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from deepchem.utils.rfdiffusion_contigs import (
+    ...     parse_contig_string, build_motif_mask)
+    >>> cm = parse_contig_string('2-2/A1-2/2-2')
+    >>> realised = cm.realise()
+    >>> ref_coords = {'A': np.ones((5, 3, 3), dtype=np.float32)}
+    >>> coords, mask = build_motif_mask(realised, ref_coords)
+    >>> coords.shape
+    (6, 3, 3)
+    >>> mask.tolist()
+    [False, False, True, True, False, False]
     """
     if reference_offset is None:
         reference_offset = {c: 1 for c in reference_coords}
@@ -407,7 +411,31 @@ def freeze_motif_coords(generated: np.ndarray, reference: np.ndarray,
 
 def realised_to_index_arrays(
         realised: RealisedContig) -> Tuple[np.ndarray, np.ndarray]:
-    """Return (motif_indices, linker_indices) arrays of int positions."""
+    """Return (motif_indices, linker_indices) arrays of int positions.
+
+    Parameters
+    ----------
+    realised : RealisedContig
+        Realised contig plan with concrete lengths.
+
+    Returns
+    -------
+    motif_indices : numpy.ndarray
+        1D array of int indices corresponding to motif residues.
+    linker_indices : numpy.ndarray
+        1D array of int indices corresponding to linker residues.
+
+    Examples
+    --------
+    >>> from deepchem.utils.rfdiffusion_contigs import (
+    ...     parse_contig_string, realised_to_index_arrays)
+    >>> cm = parse_contig_string('2-2/A1-2/2-2')
+    >>> motif_idx, linker_idx = realised_to_index_arrays(cm.realise())
+    >>> motif_idx.tolist()
+    [2, 3]
+    >>> linker_idx.tolist()
+    [0, 1, 4, 5]
+    """
     mask = realised.motif_mask()
     idx = np.arange(realised.total_length, dtype=np.int64)
     return idx[mask], idx[~mask]
