@@ -159,6 +159,17 @@ class OuterProductMean(nn.Module):
     The pre-projection layer norm follows AlphaFold2's outer-product-mean
     placement; only one residue context (the single representation
     itself) participates because RFDiffusion does not use an MSA stack.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from deepchem.models.torch_models.rfdiffusion_pair_track import (
+    ...     OuterProductMean)
+    >>> layer = OuterProductMean(embed_dim=16, pair_dim=32, hidden_dim=8)
+    >>> single = torch.randn(2, 6, 16)
+    >>> pair_update = layer(single)
+    >>> pair_update.shape
+    torch.Size([2, 6, 6, 32])
     """
 
     def __init__(self,
@@ -234,6 +245,18 @@ class TriangleMultiplicativeUpdate(nn.Module):
         If True, use the outgoing variant (sum over :math:`a_{ik}
         b_{jk}`); otherwise use the incoming variant (sum over
         :math:`a_{ki} b_{kj}`).
+
+    Examples
+    --------
+    >>> import torch
+    >>> from deepchem.models.torch_models.rfdiffusion_pair_track import (
+    ...     TriangleMultiplicativeUpdate)
+    >>> layer = TriangleMultiplicativeUpdate(
+    ...     pair_dim=16, hidden_dim=32, outgoing=True)
+    >>> pair = torch.randn(2, 5, 5, 16)
+    >>> out = layer(pair)
+    >>> out.shape
+    torch.Size([2, 5, 5, 16])
     """
 
     def __init__(self,
@@ -335,6 +358,18 @@ class TriangleAttention(nn.Module):
         Per-head channel size :math:`d_h`.
     starting_node : bool, default True
         Selects the starting-node (True) or ending-node (False) variant.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from deepchem.models.torch_models.rfdiffusion_pair_track import (
+    ...     TriangleAttention)
+    >>> layer = TriangleAttention(
+    ...     pair_dim=16, num_heads=4, head_dim=8, starting_node=True)
+    >>> pair = torch.randn(2, 5, 5, 16)
+    >>> out = layer(pair)
+    >>> out.shape
+    torch.Size([2, 5, 5, 16])
     """
 
     def __init__(self,
@@ -456,7 +491,26 @@ class TriangleAttention(nn.Module):
 
 
 class PairTransition(nn.Module):
-    """Two-layer feed-forward block applied position-wise to the pair."""
+    """Two-layer feed-forward block applied position-wise to the pair track.
+
+    Parameters
+    ----------
+    pair_dim : int
+        Pair channel dimension.
+    expansion : int, default 4
+        Hidden expansion factor.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from deepchem.models.torch_models.rfdiffusion_pair_track import (
+    ...     PairTransition)
+    >>> layer = PairTransition(pair_dim=16, expansion=2)
+    >>> pair = torch.randn(2, 4, 4, 16)
+    >>> out = layer(pair)
+    >>> out.shape
+    torch.Size([2, 4, 4, 16])
+    """
 
     def __init__(self, pair_dim: int, expansion: int = 4) -> None:
         super().__init__()
