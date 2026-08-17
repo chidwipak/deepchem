@@ -17,34 +17,35 @@ try:
 except ModuleNotFoundError:
     raise ImportError("rfdiffusion_frames requires PyTorch to be installed.")
 
-__all__ = [
-    "apply_inverse_rigid",
-    "apply_rigid",
-    "build_backbone_frames",
-    "compose_rigids",
-    "invert_rigid",
-    "make_identity_rigid",
-    "so3_exp_map",
-    "so3_log_map",
-]
-
+# Threshold for small-angle Taylor expansions.
+# For rotation angles theta < 1e-4, sin(theta)/theta ~ 1 - theta^2/6 and
+# (1 - cos(theta))/theta^2 ~ 1/2 - theta^2/24. This avoids division-by-zero
+# and float32 precision loss near the identity (Grassia, 1998).
 _SMALL_OMEGA: float = 1e-4
 
 
-def _normalize(vector: torch.Tensor, eps: float) -> torch.Tensor:
-    """Normalize vectors with epsilon stabilization.
+def _normalize(vector: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """Normalize 3D vectors along the last dimension with epsilon stabilization.
 
     Parameters
     ----------
     vector : torch.Tensor
         Tensor of shape `(..., 3)`.
-    eps : float
-        Positive epsilon added to the norm.
+    eps : float, default 1e-8
+        Small positive constant added to the norm denominator.
 
     Returns
     -------
     torch.Tensor
-        Normalized vectors.
+        Normalized vectors of shape `(..., 3)`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> v = torch.tensor([[3.0, 0.0, 0.0], [0.0, 4.0, 0.0]])
+    >>> _normalize(v)
+    tensor([[1., 0., 0.],
+            [0., 1., 0.]])
     """
     norm = torch.linalg.norm(vector, dim=-1, keepdim=True)
     return vector / (norm + eps)
@@ -53,22 +54,47 @@ def _normalize(vector: torch.Tensor, eps: float) -> torch.Tensor:
 def build_backbone_frames(
         backbone: torch.Tensor,
         eps: float = 1e-8) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Build residue-local frames from `(N, CA, C)` backbone coordinates.
+    """Construct residue-local coordinate frames from protein backbone coordinates.
+
+    Builds an orthonormal right-handed reference frame for each residue
+    from N, CA, and C atom positions using Gram-Schmidt orthogonalization:
+    - The x-axis points along the CA -> C bond.
+    - The xy-plane contains the N, CA, and C atoms (with N in the positive y-half).
+    - The z-axis is the cross product x x y.
+    - The frame origin is positioned at the CA atom.
 
     Parameters
     ----------
     backbone : torch.Tensor
-        Backbone coordinates of shape `(..., 3, 3)` ordered as
-        `(N, CA, C)`.
+        Backbone coordinates of shape `(..., 3, 3)` ordered as `(N, CA, C)`
+        along the second-to-last dimension.
     eps : float, default 1e-8
-        Positive stabilization constant.
+        Small positive constant to avoid division by zero during normalization.
 
     Returns
     -------
     rotations : torch.Tensor
-        Rotation matrices of shape `(..., 3, 3)`.
+        Rotation matrices of shape `(..., 3, 3)` representing local frame orientations.
     translations : torch.Tensor
-        Frame origins of shape `(..., 3)`.
+        Frame origins of shape `(..., 3)` corresponding to CA coordinates.
+
+    Raises
+    ------
+    ValueError
+        If backbone does not have shape `(..., 3, 3)` or `eps <= 0`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> n = torch.tensor([0.0, 1.0, 0.0])
+    >>> ca = torch.tensor([0.0, 0.0, 0.0])
+    >>> c = torch.tensor([1.0, 0.0, 0.0])
+    >>> backbone = torch.stack([n, ca, c], dim=0)
+    >>> R, t = build_backbone_frames(backbone)
+    >>> R.shape
+    torch.Size([3, 3])
+    >>> t.shape
+    torch.Size([3])
     """
     if backbone.shape[-2:] != (3, 3):
         raise ValueError("backbone must have shape (..., 3, 3).")
@@ -95,23 +121,32 @@ def make_identity_rigid(
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Create identity rigid transforms `(I, 0)`.
+    """Create identity rigid transforms (identity rotation and zero translation).
 
     Parameters
     ----------
     shape : sequence of int
-        Batch shape.
+        Batch shape for the generated transforms.
     device : torch.device, optional
-        Device for returned tensors.
+        Target device for the returned tensors.
     dtype : torch.dtype, optional
-        Tensor dtype.
+        Target data type for the returned tensors.
 
     Returns
     -------
     rotations : torch.Tensor
-        Identity rotations of shape `(*shape, 3, 3)`.
+        Identity rotation matrices of shape `(*shape, 3, 3)`.
     translations : torch.Tensor
-        Zero translations of shape `(*shape, 3)`.
+        Zero translation vectors of shape `(*shape, 3)`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> R, t = make_identity_rigid((2, 4))
+    >>> R.shape
+    torch.Size([2, 4, 3, 3])
+    >>> t.shape
+    torch.Size([2, 4, 3])
     """
     shape = tuple(shape)
     rotation = torch.eye(3, device=device, dtype=dtype)
@@ -123,7 +158,24 @@ def make_identity_rigid(
 def _expand_rigid_to_points(
         rotations: torch.Tensor, translations: torch.Tensor,
         points: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Broadcast rigid transforms across extra point dimensions."""
+    """Broadcast rigid transform batch dimensions across extra point dimensions.
+
+    Parameters
+    ----------
+    rotations : torch.Tensor
+        Rotation matrices of shape `(..., 3, 3)`.
+    translations : torch.Tensor
+        Translation vectors of shape `(..., 3)`.
+    points : torch.Tensor
+        Points tensor of shape `(..., *extra_dims, 3)`.
+
+    Returns
+    -------
+    expanded_rotations : torch.Tensor
+        Rotations with unsqueezed singleton dimensions matching points.
+    expanded_translations : torch.Tensor
+        Translations with unsqueezed singleton dimensions matching points.
+    """
     extra_dims = points.dim() - translations.dim()
     if extra_dims < 0:
         raise ValueError(
@@ -136,7 +188,9 @@ def _expand_rigid_to_points(
 
 def apply_rigid(rotations: torch.Tensor, translations: torch.Tensor,
                 points: torch.Tensor) -> torch.Tensor:
-    """Apply rigid transforms `x -> x @ R.T + t`.
+    """Apply rigid transforms to 3D points: `y = points @ R.T + t`.
+
+    Transforms points from local coordinates to global coordinates.
 
     Parameters
     ----------
@@ -145,12 +199,21 @@ def apply_rigid(rotations: torch.Tensor, translations: torch.Tensor,
     translations : torch.Tensor
         Translation vectors of shape `(..., 3)`.
     points : torch.Tensor
-        Points of shape `(..., 3)` or with extra point axes.
+        Points tensor of shape `(..., 3)` or with extra point axes.
 
     Returns
     -------
     torch.Tensor
-        Transformed points.
+        Transformed points of the same shape as `points`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> R, t = make_identity_rigid((2,))
+    >>> pts = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    >>> out = apply_rigid(R, t, pts)
+    >>> torch.allclose(out, pts)
+    True
     """
     rotations, translations = _expand_rigid_to_points(rotations, translations,
                                                       points)
@@ -161,7 +224,33 @@ def apply_rigid(rotations: torch.Tensor, translations: torch.Tensor,
 
 def apply_inverse_rigid(rotations: torch.Tensor, translations: torch.Tensor,
                         points: torch.Tensor) -> torch.Tensor:
-    """Apply inverse rigid transforms `y -> (y - t) @ R`."""
+    """Apply inverse rigid transforms to 3D points: `x = (points - t) @ R`.
+
+    Transforms points from global coordinates back to local residue coordinates.
+
+    Parameters
+    ----------
+    rotations : torch.Tensor
+        Rotation matrices of shape `(..., 3, 3)`.
+    translations : torch.Tensor
+        Translation vectors of shape `(..., 3)`.
+    points : torch.Tensor
+        Points tensor of shape `(..., 3)` or with extra point axes.
+
+    Returns
+    -------
+    torch.Tensor
+        Transformed points of the same shape as `points`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> R, t = make_identity_rigid((2,))
+    >>> pts = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    >>> out = apply_inverse_rigid(R, t, pts)
+    >>> torch.allclose(out, pts)
+    True
+    """
     rotations, translations = _expand_rigid_to_points(rotations, translations,
                                                       points)
     centered = points - translations
@@ -171,7 +260,7 @@ def apply_inverse_rigid(rotations: torch.Tensor, translations: torch.Tensor,
 def invert_rigid(
         rotations: torch.Tensor,
         translations: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Invert rigid transforms.
+    """Compute the inverse of rigid transforms `(R, t)^(-1) = (R.T, -t @ R)`.
 
     Parameters
     ----------
@@ -183,9 +272,18 @@ def invert_rigid(
     Returns
     -------
     inv_rotations : torch.Tensor
-        Transposed rotations.
+        Inverted rotation matrices of shape `(..., 3, 3)`.
     inv_translations : torch.Tensor
-        Inverse translations.
+        Inverted translation vectors of shape `(..., 3)`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> R = torch.eye(3)
+    >>> t = torch.tensor([1.0, 2.0, 3.0])
+    >>> inv_R, inv_t = invert_rigid(R, t)
+    >>> inv_t
+    tensor([-1., -2., -3.])
     """
     inv_rotations = rotations.transpose(-1, -2)
     inv_translations = -torch.matmul(translations.unsqueeze(-2),
@@ -197,7 +295,7 @@ def compose_rigids(
         rotations_a: torch.Tensor, translations_a: torch.Tensor,
         rotations_b: torch.Tensor,
         translations_b: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Compose two rigid transforms `T_a o T_b`.
+    """Compose two rigid transforms `T_a o T_b = (R_a @ R_b, apply_rigid(T_a, t_b))`.
 
     Parameters
     ----------
@@ -209,9 +307,18 @@ def compose_rigids(
     Returns
     -------
     rotations : torch.Tensor
-        Composite rotations.
+        Composed rotation matrices of shape `(..., 3, 3)`.
     translations : torch.Tensor
-        Composite translations.
+        Composed translation vectors of shape `(..., 3)`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> R1, t1 = make_identity_rigid(())
+    >>> R2, t2 = make_identity_rigid(())
+    >>> R_comp, t_comp = compose_rigids(R1, t1, R2, t2)
+    >>> R_comp.shape
+    torch.Size([3, 3])
     """
     rotations = torch.matmul(rotations_a, rotations_b)
     translations = apply_rigid(rotations_a, translations_a, translations_b)
@@ -235,17 +342,26 @@ def _safe_one_minus_cos_div_x_sq(x: torch.Tensor) -> torch.Tensor:
 
 
 def so3_exp_map(tangent: torch.Tensor) -> torch.Tensor:
-    """Map tangent vectors in so(3) to rotation matrices.
+    """Map so(3) tangent vectors (axis-angle) to SO(3) rotation matrices via Rodrigues' formula.
 
     Parameters
     ----------
     tangent : torch.Tensor
-        Tangent vectors of shape `(..., 3)`.
+        Tangent vectors of shape `(..., 3)` where direction specifies the
+        rotation axis and norm specifies the rotation angle in radians.
 
     Returns
     -------
     torch.Tensor
         Rotation matrices of shape `(..., 3, 3)`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> w = torch.zeros(3)
+    >>> R = so3_exp_map(w)
+    >>> torch.allclose(R, torch.eye(3))
+    True
     """
     omega = tangent.norm(dim=-1, keepdim=True).clamp(min=0.0)
     zeros = torch.zeros_like(tangent[..., 0])
@@ -264,12 +380,12 @@ def so3_exp_map(tangent: torch.Tensor) -> torch.Tensor:
 
 
 def so3_log_map(rotations: torch.Tensor) -> torch.Tensor:
-    """Map rotation matrices to tangent vectors on the principal branch.
+    """Map SO(3) rotation matrices to so(3) tangent vectors on the principal branch.
 
-    The rotation is converted to a unit quaternion first and then to an
+    The rotation matrix is converted to a unit quaternion first and then to an
     axis-angle vector. Routing through the quaternion keeps the result stable
-    for rotations near ``pi``, where reading the angle straight from the trace
-    loses accuracy because ``sin(omega)`` goes to zero.
+    for rotations near pi, where reading the angle from the matrix trace
+    loses accuracy because sin(omega) goes to zero.
 
     Parameters
     ----------
@@ -279,7 +395,15 @@ def so3_log_map(rotations: torch.Tensor) -> torch.Tensor:
     Returns
     -------
     torch.Tensor
-        Tangent vectors of shape `(..., 3)` whose norm lies in ``[0, pi]``.
+        Tangent vectors of shape `(..., 3)` whose norm lies in `[0, pi]`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> R = torch.eye(3)
+    >>> w = so3_log_map(R)
+    >>> torch.allclose(w, torch.zeros(3))
+    True
     """
     m00 = rotations[..., 0, 0]
     m11 = rotations[..., 1, 1]
