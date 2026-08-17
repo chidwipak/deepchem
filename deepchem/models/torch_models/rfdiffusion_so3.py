@@ -71,16 +71,10 @@ try:
 except ModuleNotFoundError:
     raise ImportError('rfdiffusion_so3 requires PyTorch to be installed.')
 
-__all__ = [
-    'IGSO3',
-    'log_beta_schedule',
-    'so3_log_map',
-    'so3_exp_map',
-    'so3_reverse_step',
-]
-
-# Threshold below which series expansions are used instead of the closed
-# form to preserve numerical stability.
+# Threshold for small-angle Taylor expansions.
+# For rotation angles theta < 1e-4, sin(theta)/theta ~ 1 - theta^2/6 and
+# (1 - cos(theta))/theta^2 ~ 1/2 - theta^2/24. This avoids division-by-zero
+# and float32 precision loss near the identity (Grassia, 1998).
 _SMALL_OMEGA: float = 1e-4
 _SMALL_SIGMA: float = 5e-2
 
