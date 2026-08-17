@@ -47,6 +47,47 @@ from deepchem.models.torch_models.torch_model import TorchModel
 logger = logging.getLogger(__name__)
 
 
+def _diffusion_loss(outputs: List[torch.Tensor], labels: List[torch.Tensor],
+                    weights: List[torch.Tensor]) -> torch.Tensor:
+    """MSE loss between predicted noise and true noise, with masking.
+
+    Parameters
+    ----------
+    outputs : list of torch.Tensor
+        Model outputs; ``outputs[0]`` is the predicted noise tensor of shape
+        ``(batch, seq_len, coord_dim)``.
+    labels : list of torch.Tensor
+        Ground-truth noise; ``labels[0]`` has the same shape as ``outputs[0]``.
+    weights : list of torch.Tensor
+        Per-element weights of shape ``(batch, seq_len, coord_dim)`` that mask out
+        padded positions and scale by sample weight.
+
+    Returns
+    -------
+    torch.Tensor
+        Scalar weighted-MSE loss.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from deepchem.models.torch_models.rfdiffusion import _diffusion_loss
+    >>> pred = [torch.zeros(2, 5, 9)]
+    >>> true = [torch.ones(2, 5, 9)]
+    >>> weights = [torch.ones(2, 5, 9)]
+    >>> loss = _diffusion_loss(pred, true, weights)
+    >>> float(loss)
+    1.0
+    """
+    pred_noise = outputs[0]
+    true_noise = labels[0]
+    w = weights[0]
+    loss = F.mse_loss(pred_noise, true_noise, reduction='none')
+    if w.dim() < loss.dim():
+        w = w.reshape(w.shape + (1,) * (loss.dim() - w.dim()))
+    denom = torch.clamp(w.expand_as(loss).sum(), min=1.0)
+    return (loss * w).sum() / denom
+
+
 class RFDiffusionModel(TorchModel):
     """TorchModel wrapper for the RFDiffusion protein backbone model.
 
@@ -155,38 +196,8 @@ class RFDiffusionModel(TorchModel):
         # Attach schedule so it moves with the model when .to(device) is called
         backbone.schedule = self.schedule
 
-        def diffusion_loss(outputs: List, labels: List,
-                           weights: List) -> torch.Tensor:
-            """MSE loss between predicted noise and true noise, with masking.
-
-            Parameters
-            ----------
-            outputs : list of torch.Tensor
-                Model outputs; ``outputs[0]`` is the predicted noise tensor
-                of shape ``(batch, seq_len, coord_dim)``.
-            labels : list of torch.Tensor
-                Ground-truth noise; ``labels[0]`` has the same shape as
-                ``outputs[0]``.
-            weights : list of torch.Tensor
-                Per-element weights of shape ``(batch, seq_len, coord_dim)``
-                that mask out padded positions and scale by sample weight.
-
-            Returns
-            -------
-            torch.Tensor
-                Scalar weighted-MSE loss.
-            """
-            pred_noise = outputs[0]
-            true_noise = labels[0]
-            w = weights[0]
-            loss = F.mse_loss(pred_noise, true_noise, reduction='none')
-            if w.dim() < loss.dim():
-                w = w.reshape(w.shape + (1,) * (loss.dim() - w.dim()))
-            denom = torch.clamp(w.expand_as(loss).sum(), min=1.0)
-            return (loss * w).sum() / denom
-
         super(RFDiffusionModel, self).__init__(backbone,
-                                               loss=diffusion_loss,
+                                               loss=_diffusion_loss,
                                                batch_size=batch_size,
                                                learning_rate=learning_rate,
                                                device=device,
@@ -506,7 +517,7 @@ class RFDiffusionModel(TorchModel):
         >>> samples = model.generate(num_samples=2, seq_length=15)
         >>> samples.shape
         (2, 15, 9)
-        >>> np.isfinite(samples).all()
+        >>> bool(np.isfinite(samples).all())
         True
         """
         if num_samples <= 0:
