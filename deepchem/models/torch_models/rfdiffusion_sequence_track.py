@@ -46,20 +46,20 @@ try:
     import torch
     import torch.nn as nn
     import torch.nn.functional as F
-except ModuleNotFoundError:
+    from deepchem.models.torch_models.rfdiffusion_frames import make_identity_rigid
+    from deepchem.models.torch_models.rfdiffusion_ipa import (
+        InvariantPointAttention)
+    from deepchem.models.torch_models.rfdiffusion_pair_track import (
+        OuterProductMean,
+        PairTransition,
+        RelativePositionEmbedding,
+        TriangleAttention,
+        TriangleMultiplicativeUpdate,
+    )
+except (ModuleNotFoundError, ImportError):
     raise ImportError(
-        'rfdiffusion_sequence_track requires PyTorch to be installed.')
-
-from deepchem.models.torch_models.rfdiffusion_frames import make_identity_rigid
-from deepchem.models.torch_models.rfdiffusion_ipa import (
-    InvariantPointAttention)
-from deepchem.models.torch_models.rfdiffusion_pair_track import (
-    OuterProductMean,
-    PairTransition,
-    RelativePositionEmbedding,
-    TriangleAttention,
-    TriangleMultiplicativeUpdate,
-)
+        'rfdiffusion_sequence_track requires PyTorch and upstream RFDiffusion modules.'
+    )
 
 # ---------------------------------------------------------------------------
 # 2D → 1D update: pair-biased self-attention
@@ -85,6 +85,18 @@ class PairBiasedSingleAttention(nn.Module):
         Number of attention heads.
     dropout : float, default 0.0
         Dropout probability applied to attention weights.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from deepchem.models.torch_models.rfdiffusion_sequence_track import (
+    ...     PairBiasedSingleAttention)
+    >>> layer = PairBiasedSingleAttention(embed_dim=16, pair_dim=8, num_heads=4)
+    >>> single = torch.randn(2, 5, 16)
+    >>> pair = torch.randn(2, 5, 5, 8)
+    >>> out = layer(single, pair)
+    >>> out.shape
+    torch.Size([2, 5, 16])
     """
 
     def __init__(self,
@@ -190,6 +202,18 @@ class SingleTransition(nn.Module):
         Hidden expansion of the MLP.
     dropout : float, default 0.0
         Dropout probability applied to the MLP hidden activations.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from deepchem.models.torch_models.rfdiffusion_sequence_track import (
+    ...     SingleTransition)
+    >>> layer = SingleTransition(embed_dim=16, expansion=2)
+    >>> single = torch.randn(2, 5, 16)
+    >>> t_emb = torch.randn(2, 16)
+    >>> out = layer(single, t_emb)
+    >>> out.shape
+    torch.Size([2, 5, 16])
     """
 
     def __init__(self,
@@ -269,6 +293,16 @@ def quaternion_to_rotation_matrix(quat: torch.Tensor) -> torch.Tensor:
     -------
     torch.Tensor
         Rotation matrix of shape ``(..., 3, 3)``.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from deepchem.models.torch_models.rfdiffusion_sequence_track import (
+    ...     quaternion_to_rotation_matrix)
+    >>> q = torch.tensor([1.0, 0.0, 0.0, 0.0])
+    >>> R = quaternion_to_rotation_matrix(q)
+    >>> torch.allclose(R, torch.eye(3))
+    True
     """
     norm = torch.linalg.norm(quat, dim=-1, keepdim=True).clamp(min=1e-12)
     w, x, y, z = (quat / norm).unbind(dim=-1)
@@ -312,6 +346,21 @@ class BackboneUpdate(nn.Module):
     ----------
     embed_dim : int
         Single-track channel size :math:`C_s`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from deepchem.models.torch_models.rfdiffusion_sequence_track import (
+    ...     BackboneUpdate)
+    >>> from deepchem.models.torch_models.rfdiffusion_frames import make_identity_rigid
+    >>> head = BackboneUpdate(embed_dim=16)
+    >>> single = torch.randn(2, 5, 16)
+    >>> R, t = make_identity_rigid((2, 5))
+    >>> new_R, new_t = head(single, R, t)
+    >>> new_R.shape
+    torch.Size([2, 5, 3, 3])
+    >>> new_t.shape
+    torch.Size([2, 5, 3])
     """
 
     def __init__(self, embed_dim: int) -> None:
@@ -416,6 +465,24 @@ class RFDiffusionTrackBlock(nn.Module):
         Default chunk size applied to triangular operations. ``None``
         means no chunking (dense path). Tests verify chunked and dense
         outputs match to within ``atol=1e-5``.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from deepchem.models.torch_models.rfdiffusion_sequence_track import (
+    ...     RFDiffusionTrackBlock)
+    >>> from deepchem.models.torch_models.rfdiffusion_frames import make_identity_rigid
+    >>> block = RFDiffusionTrackBlock(
+    ...     embed_dim=16, pair_dim=8, num_heads=2, pair_num_heads=2,
+    ...     triangle_hidden_dim=8, triangle_head_dim=4, opm_hidden_dim=4,
+    ...     num_qk_points=2, num_v_points=2)
+    >>> single = torch.randn(2, 4, 16)
+    >>> pair = torch.randn(2, 4, 4, 8)
+    >>> R, t = make_identity_rigid((2, 4))
+    >>> t_emb = torch.randn(2, 16)
+    >>> s_out, p_out, R_out, t_out = block(single, pair, R, t, t_emb)
+    >>> s_out.shape
+    torch.Size([2, 4, 16])
     """
 
     def __init__(self,
