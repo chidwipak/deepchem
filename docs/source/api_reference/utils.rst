@@ -977,3 +977,25 @@ atom permutations for symmetric ligands.
 .. autofunction:: deepchem.utils.rfdiffusion_ligand.parse_ligand_file
 
 .. autofunction:: deepchem.utils.rfdiffusion_ligand.find_ligand_automorphisms
+
+Protein Quality Utils
+----------------------
+
+Structural quality metrics for evaluating generated protein backbones:
+radius of gyration, steric clash score, Kabsch alignment, RMSD,
+self-consistency RMSD, TM-score, and a backbone bond-length sanity
+check.
+
+.. autofunction:: deepchem.utils.protein_quality.radius_of_gyration
+
+.. autofunction:: deepchem.utils.protein_quality.clash_score
+
+.. autofunction:: deepchem.utils.protein_quality.kabsch_align
+
+.. autofunction:: deepchem.utils.protein_quality.rmsd
+
+.. autofunction:: deepchem.utils.protein_quality.sc_rmsd
+
+.. autofunction:: deepchem.utils.protein_quality.tm_score
+
+.. autofunction:: deepchem.utils.protein_quality.backbone_bond_validity
