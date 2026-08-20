@@ -389,20 +389,46 @@ class IGSO3:
         return torch.stack(rows, dim=0)
 
     @staticmethod
-    def _score_omega(omega: torch.Tensor, sigma: torch.Tensor,
-                     lmax: int) -> torch.Tensor:
-        """Evaluate domega log f(omega; sigma) using upstream-style autograd."""
-        with torch.enable_grad():
-            omega_var = omega.detach().clone().requires_grad_(True)
-            f = IGSO3._f_omega(omega_var, sigma.detach(), lmax)
-            scores = []
-            for row in f:
-                log_f = torch.log(row)
-                grad = torch.autograd.grad(log_f.sum(),
-                                           omega_var,
-                                           retain_graph=True)[0]
-                scores.append(grad.detach())
-        return torch.stack(scores, dim=0)
+    def _score_omega(omega: torch.Tensor,
+                     sigma: torch.Tensor,
+                     lmax: int,
+                     chunk_size: int = 32) -> torch.Tensor:
+        """Evaluate domega log f(omega; sigma) using batched autograd.
+
+        Calling ``torch.autograd.grad`` once per sigma row with
+        ``retain_graph=True`` (as a naive per-row loop would) keeps the
+        whole shared computation graph alive across every call, which
+        makes the cost grow quadratically in the number of sigmas --
+        completely impractical at the ``num_diffusion_steps`` ~ 1000
+        scale this class is normally used at. Instead, sigmas are
+        processed in chunks: within a chunk, every row gets its own
+        independent leaf tensor (via ``.clone()``), so ``f`` for the whole
+        chunk can be computed with one vectorized (chunk, N, L) batched
+        expression and its per-row gradients recovered with a *single*
+        backward call, since independent leaves have no cross-row terms
+        to sum over. This is the same closed-form formula as
+        ``_f_omega``, just batched over sigma instead of looped.
+        """
+        num_sigma = sigma.shape[0]
+        l_values = torch.arange(lmax + 1, device=omega.device)[None, None, :]
+        scores = []
+        for start in range(0, num_sigma, chunk_size):
+            sigma_chunk = sigma[start:start + chunk_size].detach()
+            chunk = sigma_chunk.shape[0]
+            with torch.enable_grad():
+                omega_var = omega[None, :].expand(chunk, omega.shape[0]).clone()
+                omega_var.requires_grad_(True)
+                sigma_sq = (sigma_chunk**2)[:, None, None]
+                omega_col = omega_var[:, :, None]
+                terms = ((2 * l_values + 1) *
+                         torch.exp(-l_values * (l_values + 1) * sigma_sq / 2) *
+                         torch.sin(omega_col *
+                                   (l_values + 0.5)) / torch.sin(omega_col / 2))
+                f_chunk = terms.sum(dim=-1)  # (chunk, N)
+                log_f = torch.log(f_chunk)
+                grad = torch.autograd.grad(log_f.sum(), omega_var)[0]
+            scores.append(grad.detach())
+        return torch.cat(scores, dim=0)
 
     def _compute_tables(self) -> None:
         """Populate the PDF / CDF / score caches."""
