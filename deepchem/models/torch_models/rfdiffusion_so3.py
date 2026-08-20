@@ -208,10 +208,17 @@ def so3_log_map(rotations: torch.Tensor) -> torch.Tensor:
 
     # Read the unit quaternion from the rotation matrix. Each component
     # magnitude comes from the diagonal and its sign from the skew part.
-    qw = 0.5 * torch.sqrt(torch.clamp(1.0 + trace, min=0.0))
-    qx = 0.5 * torch.sqrt(torch.clamp(1.0 + m00 - m11 - m22, min=0.0))
-    qy = 0.5 * torch.sqrt(torch.clamp(1.0 - m00 + m11 - m22, min=0.0))
-    qz = 0.5 * torch.sqrt(torch.clamp(1.0 - m00 - m11 + m22, min=0.0))
+    # The clamp floor is a small positive epsilon rather than 0: torch.sqrt
+    # has an infinite gradient exactly at 0, which this component reaches
+    # whenever the corresponding quaternion axis is (near) zero -- e.g. for
+    # any rotation close to the identity. Training a model that predicts
+    # rotations close to their target hits this constantly, so a hard
+    # min=0.0 clamp turns into NaN gradients partway through optimization.
+    _sqrt_eps = 1e-12
+    qw = 0.5 * torch.sqrt(torch.clamp(1.0 + trace, min=_sqrt_eps))
+    qx = 0.5 * torch.sqrt(torch.clamp(1.0 + m00 - m11 - m22, min=_sqrt_eps))
+    qy = 0.5 * torch.sqrt(torch.clamp(1.0 - m00 + m11 - m22, min=_sqrt_eps))
+    qz = 0.5 * torch.sqrt(torch.clamp(1.0 - m00 - m11 + m22, min=_sqrt_eps))
     qx = torch.copysign(qx, rotations[..., 2, 1] - rotations[..., 1, 2])
     qy = torch.copysign(qy, rotations[..., 0, 2] - rotations[..., 2, 0])
     qz = torch.copysign(qz, rotations[..., 1, 0] - rotations[..., 0, 1])
@@ -453,13 +460,24 @@ class IGSO3:
 
     def _interp(self, omega: torch.Tensor, table: torch.Tensor) -> torch.Tensor:
         """Linear interpolation of a 1-D cached table on the omega grid."""
-        omega = omega.to(dtype=torch.float64)
+        original_device = omega.device
+        # The cached tables are float64 for interpolation accuracy, but
+        # some backends (e.g. Apple's MPS) do not support float64 tensors
+        # at all -- not even as a transient step of a combined device+dtype
+        # .to() call -- so the move to CPU and the cast to float64 have to
+        # happen as two separate steps.
+        omega = omega.to(device='cpu').to(dtype=torch.float64)
         x = (omega - self.omegas[0]) / self.domega
         x = x.clamp(0.0, float(self.num_omega - 1))
         lo = x.floor().long()
         hi = (lo + 1).clamp(max=self.num_omega - 1)
         frac = (x - lo.to(x.dtype))
-        return (1.0 - frac) * table[lo] + frac * table[hi]
+        result = (1.0 - frac) * table[lo] + frac * table[hi]
+        # MPS has no float64 support, so results headed back there are
+        # downcast to float32; other devices keep full precision.
+        result_dtype = (torch.float32
+                        if original_device.type == 'mps' else torch.float64)
+        return result.to(device=original_device, dtype=result_dtype)
 
     # ------------------------------------------------------------------
     # Sampling
