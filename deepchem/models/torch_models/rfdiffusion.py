@@ -5,18 +5,16 @@ you train and sample protein backbone structures using standard DeepChem
 workflows. Two denoiser architectures are available, selected with the
 ``architecture`` argument:
 
-- ``'multitrack'`` -- the actual RFdiffusion architecture: rigid backbone
-  frames, Invariant Point Attention, the pair track, and the
+- ``'multitrack'`` (default) -- the actual RFdiffusion architecture: rigid
+  backbone frames, Invariant Point Attention, the pair track, and the
   sequence/structure track (``RFDiffusionMultiTrackStack``), combined with
   IGSO(3) rotational diffusion and Gaussian translational diffusion. This
   is the scientifically faithful path, and the only one that supports
   contig/motif conditioning.
-- ``'transformer'`` (default) -- the lightweight ``BackboneDiffusion``
-  baseline: a plain Transformer denoiser trained with translation-only
-  DDPM on flat ``(N, CA, C)`` coordinates. This stays the default so
-  existing code built against the earlier, transformer-only version of
-  this class keeps working unchanged; pass ``architecture='multitrack'``
-  to use the real network.
+- ``'transformer'`` -- the lightweight ``BackboneDiffusion`` baseline: a
+  plain Transformer denoiser trained with translation-only DDPM on flat
+  ``(N, CA, C)`` coordinates. Kept as a cheap, quick-to-train fallback;
+  pass ``architecture='transformer'`` to use it.
 
 The building-block layers (``SinusoidalTimestepEmbedding``,
 ``ResidueEmbedding``, ``PositionalEncoding``, ``CosineSchedule``,
@@ -122,7 +120,7 @@ class RFDiffusionModel(TorchModel):
     structures with ``model.generate()``. Two denoisers are available via
     ``architecture``:
 
-    - ``'multitrack'``: the real RFdiffusion network
+    - ``'multitrack'`` (default): the real RFdiffusion network
       (``RFDiffusionMultiTrackDenoiser``), trained to predict the denoised
       backbone frame (rotation + translation) directly at every step.
       Rotations are diffused with IGSO(3) and translations with a
@@ -130,12 +128,12 @@ class RFDiffusionModel(TorchModel):
       rotation loss plus a masked translation MSE
       (``multitrack_frame_loss``). This is the only architecture that
       supports contig/motif conditioning in ``generate()``.
-    - ``'transformer'`` (default): the lightweight ``BackboneDiffusion``
-      baseline. Training uses the standard DDPM noise-prediction
-      objective: at each step a random timestep is sampled, Gaussian
-      noise is added to the clean coordinates with
-      ``CosineSchedule.q_sample``, and the model learns to predict the
-      added noise via an MSE loss.
+    - ``'transformer'``: the lightweight ``BackboneDiffusion`` baseline.
+      Training uses the standard DDPM noise-prediction objective: at each
+      step a random timestep is sampled, Gaussian noise is added to the
+      clean coordinates with ``CosineSchedule.q_sample``, and the model
+      learns to predict the added noise via an MSE loss. Cheaper to train
+      than ``'multitrack'``, useful for quick experimentation.
 
     Coordinates are center-normalized before being fed to the model and
     denormalized when samples are returned from ``generate()``.
@@ -164,8 +162,8 @@ class RFDiffusionModel(TorchModel):
     device : torch.device, optional
         Device to train and sample on. Defaults to GPU if available,
         otherwise CPU.
-    architecture : str, default 'transformer'
-        Either ``'transformer'`` or ``'multitrack'``.
+    architecture : str, default 'multitrack'
+        Either ``'multitrack'`` or ``'transformer'``.
     pair_dim : int, default 64
         Pair-track channel size. Only used when
         ``architecture='multitrack'``.
@@ -197,22 +195,21 @@ class RFDiffusionModel(TorchModel):
     ...     X[i] = p
     >>> dataset = dc.data.NumpyDataset(X=X, y=np.zeros((6, 1), dtype=np.float32))
     >>> model = dc.models.RFDiffusionModel(
-    ...     embed_dim=64, num_layers=2, num_heads=4,
-    ...     num_diffusion_steps=50, batch_size=2)
+    ...     embed_dim=32, pair_dim=16, num_blocks=1, num_heads=4,
+    ...     pair_num_heads=2, num_diffusion_steps=20, batch_size=2)
     >>> loss = model.fit(dataset, nb_epoch=1)
     >>> samples = model.generate(num_samples=2, seq_length=20)
     >>> samples.shape
     (2, 20, 9)
 
-    The real RFdiffusion architecture is used the same way, by passing
-    ``architecture='multitrack'``:
+    The lightweight Transformer baseline is used the same way, by passing
+    ``architecture='transformer'``:
 
-    >>> mt_model = dc.models.RFDiffusionModel(
-    ...     architecture='multitrack', embed_dim=32, pair_dim=16,
-    ...     num_blocks=1, num_heads=4, pair_num_heads=2,
-    ...     num_diffusion_steps=20, batch_size=2)
-    >>> loss = mt_model.fit(dataset, nb_epoch=1)
-    >>> samples = mt_model.generate(num_samples=2, seq_length=20)
+    >>> baseline_model = dc.models.RFDiffusionModel(
+    ...     architecture='transformer', embed_dim=64, num_layers=2,
+    ...     num_heads=4, num_diffusion_steps=50, batch_size=2)
+    >>> loss = baseline_model.fit(dataset, nb_epoch=1)
+    >>> samples = baseline_model.generate(num_samples=2, seq_length=20)
     >>> samples.shape
     (2, 20, 9)
 
@@ -233,7 +230,7 @@ class RFDiffusionModel(TorchModel):
                  batch_size: int = 4,
                  learning_rate: float = 1e-4,
                  device: Optional[torch.device] = None,
-                 architecture: str = 'transformer',
+                 architecture: str = 'multitrack',
                  pair_dim: int = 64,
                  num_blocks: int = 2,
                  pair_num_heads: int = 4,
@@ -345,7 +342,9 @@ class RFDiffusionModel(TorchModel):
         --------
         >>> import numpy as np
         >>> import deepchem as dc
-        >>> model = dc.models.RFDiffusionModel()
+        >>> model = dc.models.RFDiffusionModel(
+        ...     embed_dim=32, pair_dim=16, num_blocks=1,
+        ...     num_diffusion_steps=10)
         >>> coords_33 = np.random.randn(10, 3, 3).astype(np.float32)
         >>> out = model._normalize_coords(coords_33)
         >>> out.shape
@@ -400,7 +399,9 @@ class RFDiffusionModel(TorchModel):
         --------
         >>> import numpy as np
         >>> import deepchem as dc
-        >>> model = dc.models.RFDiffusionModel()
+        >>> model = dc.models.RFDiffusionModel(
+        ...     embed_dim=32, pair_dim=16, num_blocks=1,
+        ...     num_diffusion_steps=10)
         >>> coords = np.random.randn(5, 9).astype(np.float32)
         >>> padded, orig_len = model._pad_coords(coords, 10)
         >>> padded.shape
@@ -425,15 +426,22 @@ class RFDiffusionModel(TorchModel):
             pad_batches: bool = True) -> Iterable[Tuple[List, List, List]]:
         """Yield diffusion training batches from a DeepChem dataset.
 
-        For each mini-batch this method:
+        For each mini-batch this method normalizes each protein's
+        coordinates with ``_normalize_coords``, pads them to a common
+        length with ``_pad_coords``, and samples random diffusion
+        timesteps uniformly from ``[0, num_diffusion_steps)``. What gets
+        yielded after that depends on ``architecture``:
 
-        1. Normalizes each protein's coordinates with ``_normalize_coords``.
-        2. Pads them to a common length with ``_pad_coords``.
-        3. Samples random diffusion timesteps uniformly from
-           ``[0, num_diffusion_steps)``.
-        4. Adds noise with ``CosineSchedule.q_sample``.
-        5. Yields ``([noisy_coords, timesteps, mask], [noise], [weights])``
-           where ``mask`` is a float array marking valid (non-padded) positions.
+        - ``'transformer'``: adds noise with ``CosineSchedule.q_sample``
+          and yields ``([noisy_coords, timesteps, mask], [noise],
+          [weights])``, where ``mask`` is a float array marking valid
+          (non-padded) positions.
+        - ``'multitrack'``: builds ground-truth rigid frames from the
+          padded coordinates with ``build_backbone_frames``, diffuses them
+          with ``sample_noisy_frames`` (IGSO(3) for rotations,
+          ``CosineSchedule.q_sample`` for translations), and yields
+          ``([noisy_coords, noisy_rotations, noisy_translations,
+          timesteps, mask], [rotations0, translations0], [weights])``.
 
         Running statistics for CA-centroid and coordinate std are updated
         each batch and used by ``generate()`` to denormalize samples.
@@ -455,18 +463,15 @@ class RFDiffusionModel(TorchModel):
         Yields
         ------
         tuple
-            ``([noisy_coords, timesteps, mask], [noise], [weights])``
-
-            - ``noisy_coords``: ``np.ndarray`` of shape
-              ``(batch, max_len, 9)``.
-            - ``timesteps``: ``np.ndarray`` of shape ``(batch,)``,
-              dtype int64.
-            - ``mask``: ``np.ndarray`` of shape ``(batch, max_len)``,
-              dtype float32; 1.0 for valid positions, 0.0 for padding.
-            - ``noise``: ``np.ndarray`` of shape ``(batch, max_len, 9)``.
-            - ``weights``: ``np.ndarray`` of shape
-              ``(batch, max_len, 9)``; combines positional mask with
-              per-sample weights.
+            See the architecture-dependent formats described above.
+            Shapes shared by both: ``noisy_coords`` is ``(batch, max_len,
+            9)``; ``timesteps`` is ``(batch,)`` int64; ``mask`` is
+            ``(batch, max_len)`` float32 (1.0 for valid positions, 0.0 for
+            padding). For ``'transformer'``, ``noise`` and ``weights`` are
+            ``(batch, max_len, 9)``. For ``'multitrack'``,
+            ``noisy_rotations`` / ``rotations0`` are ``(batch, max_len, 3,
+            3)``; ``noisy_translations`` / ``translations0`` are ``(batch,
+            max_len, 3)``; ``weights`` is ``(batch, max_len)``.
 
         Raises
         ------
@@ -686,19 +691,19 @@ class RFDiffusionModel(TorchModel):
         >>> import numpy as np
         >>> import deepchem as dc
         >>> model = dc.models.RFDiffusionModel(
-        ...     embed_dim=32, num_layers=1, num_heads=4,
-        ...     num_diffusion_steps=10)
+        ...     embed_dim=32, pair_dim=16, num_blocks=1, num_heads=4,
+        ...     pair_num_heads=2, num_diffusion_steps=10)
         >>> samples = model.generate(num_samples=2, seq_length=15)
         >>> samples.shape
         (2, 15, 9)
         >>> bool(np.isfinite(samples).all())
         True
 
-        Motif-conditioned generation with the multi-track architecture
-        holds a reference sub-structure fixed while the rest is generated:
+        Motif-conditioned generation holds a reference sub-structure fixed
+        while the rest is generated:
 
         >>> mt_model = dc.models.RFDiffusionModel(
-        ...     architecture='multitrack', embed_dim=32, pair_dim=16,
+        ...     embed_dim=32, pair_dim=16,
         ...     num_blocks=1, num_heads=4, pair_num_heads=2,
         ...     num_diffusion_steps=10)
         >>> mask = np.zeros(12, dtype=bool)

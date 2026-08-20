@@ -26,11 +26,17 @@ def _make_dataset(n=6, length=20):
 
 
 def _small_model(**kw):
+    # embed_dim/num_layers keep the 'transformer' baseline cheap;
+    # pair_dim/num_blocks/pair_num_heads do the same for the default
+    # 'multitrack' architecture, so this helper stays fast either way.
     defaults = dict(embed_dim=32,
                     num_layers=1,
                     num_heads=4,
                     num_diffusion_steps=10,
-                    batch_size=2)
+                    batch_size=2,
+                    pair_dim=8,
+                    num_blocks=1,
+                    pair_num_heads=2)
     defaults.update(kw)
     return RFDiffusionModel(**defaults)
 
@@ -199,7 +205,7 @@ class TestRFDiffusionModelMultiTrack:
         assert np.isfinite(samples).all()
 
     def test_motif_conditioning_requires_multitrack(self):
-        model = _small_model()  # architecture='transformer'
+        model = _small_transformer_model()
         mask = np.zeros(10, dtype=bool)
         reference = np.zeros((10, 3, 3), dtype=np.float32)
         with pytest.raises(ValueError):
@@ -230,3 +236,33 @@ class TestRFDiffusionModelMultiTrack:
         model2 = _small_multitrack_model()
         model2.restore(model_dir=str(tmp_path))
         assert model2._train_std == model._train_std
+
+
+def _small_transformer_model(**kw):
+    defaults = dict(architecture='transformer',
+                    embed_dim=32,
+                    num_layers=1,
+                    num_heads=4,
+                    num_diffusion_steps=10,
+                    batch_size=2)
+    defaults.update(kw)
+    return RFDiffusionModel(**defaults)
+
+
+@pytest.mark.torch
+@requires_dc
+class TestRFDiffusionModelTransformerBaseline:
+    """Standalone coverage for architecture='transformer', now that it is
+    no longer the default exercised implicitly by _small_model()."""
+
+    def test_fit_returns_loss(self):
+        model = _small_transformer_model()
+        loss = model.fit(_make_dataset(), nb_epoch=1)
+        assert isinstance(loss, float)
+        assert np.isfinite(loss)
+
+    def test_generate_shape_and_finite(self):
+        model = _small_transformer_model()
+        samples = model.generate(num_samples=2, seq_length=10)
+        assert samples.shape == (2, 10, 9)
+        assert np.isfinite(samples).all()
