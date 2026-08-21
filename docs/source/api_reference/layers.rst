@@ -614,3 +614,16 @@ chain onto a frozen partner representation.
 
 .. autoclass:: deepchem.models.torch_models.rfdiffusion_conditioning.BinderCrossAttention
    :members:
+
+RFDiffusion All-Atom Denoiser
+--------------------------------
+
+The ligand-conditioned denoiser behind ``RFDiffusionAA``: embeds a fixed
+ligand's atoms and cross-attends them into the protein backbone
+denoiser at every step.
+
+.. autoclass:: deepchem.models.torch_models.rfdiffusion_aa.LigandContextEmbedding
+   :members:
+
+.. autoclass:: deepchem.models.torch_models.rfdiffusion_aa.RFDiffusionAADenoiser
+   :members:
