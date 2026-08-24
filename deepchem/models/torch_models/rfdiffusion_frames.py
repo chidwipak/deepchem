@@ -1,11 +1,29 @@
 """SE(3) rigid-frame math utilities for RFDiffusion.
 
-This module contains the non-learned geometric primitives used by the
-RFDiffusion stack:
+RFDiffusion represents each residue as a rigid frame: a rotation matrix
+plus a translation, the same `(R, t)` convention AlphaFold2's structure
+module uses. `build_backbone_frames` builds one such frame per residue
+from its `(N, CA, C)` backbone atoms, and the rest of the module is the
+algebra needed to work with those frames:
 
-* residue-local frame construction from backbone atoms `(N, CA, C)`
-* rigid transform apply / inverse / invert / compose helpers
-* Rodrigues exp/log maps between so(3) vectors and SO(3) rotations
+* apply / inverse-apply / invert / compose helpers for moving points and
+  frames between global and residue-local coordinates
+* Rodrigues exp/log maps between so(3) tangent vectors and SO(3) rotations
+
+Downstream, the frames from `build_backbone_frames` feed the invariant
+point attention (IPA) block, and `so3_exp_map`/`so3_log_map` are what let
+the rotational diffusion process update and read back a residue's
+orientation at each denoising step.
+
+DeepChem's `equivariance_utils.py` already has SO(3)/SE(3) exp and log
+maps, but through a `LieGroup` class built for a different representation
+(homogeneous matrices and 6D Lie algebra vectors, used by the LieConv/TFN
+layers). Converting between that and the `(R, t)` frames used here on
+every call would add overhead without simplifying anything, so this
+module keeps its own copies tailored to the frame representation. The log
+map here also goes through a quaternion rather than the matrix trace,
+which stays accurate for rotations near pi where the trace-based form
+loses precision.
 
 The module is intentionally self-contained and depends only on PyTorch.
 """
@@ -42,6 +60,7 @@ def _normalize(vector: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     Examples
     --------
     >>> import torch
+    >>> from deepchem.models.torch_models.rfdiffusion_frames import _normalize
     >>> v = torch.tensor([[3.0, 0.0, 0.0], [0.0, 4.0, 0.0]])
     >>> _normalize(v)
     tensor([[1., 0., 0.],
@@ -86,6 +105,7 @@ def build_backbone_frames(
     Examples
     --------
     >>> import torch
+    >>> from deepchem.models.torch_models.rfdiffusion_frames import build_backbone_frames
     >>> n = torch.tensor([0.0, 1.0, 0.0])
     >>> ca = torch.tensor([0.0, 0.0, 0.0])
     >>> c = torch.tensor([1.0, 0.0, 0.0])
@@ -142,6 +162,7 @@ def make_identity_rigid(
     Examples
     --------
     >>> import torch
+    >>> from deepchem.models.torch_models.rfdiffusion_frames import make_identity_rigid
     >>> R, t = make_identity_rigid((2, 4))
     >>> R.shape
     torch.Size([2, 4, 3, 3])
@@ -175,6 +196,19 @@ def _expand_rigid_to_points(
         Rotations with unsqueezed singleton dimensions matching points.
     expanded_translations : torch.Tensor
         Translations with unsqueezed singleton dimensions matching points.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from deepchem.models.torch_models.rfdiffusion_frames import (
+    ...     make_identity_rigid, _expand_rigid_to_points)
+    >>> R, t = make_identity_rigid((2,))
+    >>> points = torch.randn(2, 5, 3)  # 5 atoms per residue
+    >>> R_exp, t_exp = _expand_rigid_to_points(R, t, points)
+    >>> R_exp.shape
+    torch.Size([2, 1, 3, 3])
+    >>> t_exp.shape
+    torch.Size([2, 1, 3])
     """
     extra_dims = points.dim() - translations.dim()
     if extra_dims < 0:
@@ -209,6 +243,8 @@ def apply_rigid(rotations: torch.Tensor, translations: torch.Tensor,
     Examples
     --------
     >>> import torch
+    >>> from deepchem.models.torch_models.rfdiffusion_frames import (
+    ...     apply_rigid, make_identity_rigid)
     >>> R, t = make_identity_rigid((2,))
     >>> pts = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
     >>> out = apply_rigid(R, t, pts)
@@ -245,6 +281,8 @@ def apply_inverse_rigid(rotations: torch.Tensor, translations: torch.Tensor,
     Examples
     --------
     >>> import torch
+    >>> from deepchem.models.torch_models.rfdiffusion_frames import (
+    ...     apply_inverse_rigid, make_identity_rigid)
     >>> R, t = make_identity_rigid((2,))
     >>> pts = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
     >>> out = apply_inverse_rigid(R, t, pts)
@@ -279,6 +317,7 @@ def invert_rigid(
     Examples
     --------
     >>> import torch
+    >>> from deepchem.models.torch_models.rfdiffusion_frames import invert_rigid
     >>> R = torch.eye(3)
     >>> t = torch.tensor([1.0, 2.0, 3.0])
     >>> inv_R, inv_t = invert_rigid(R, t)
@@ -314,6 +353,8 @@ def compose_rigids(
     Examples
     --------
     >>> import torch
+    >>> from deepchem.models.torch_models.rfdiffusion_frames import (
+    ...     compose_rigids, make_identity_rigid)
     >>> R1, t1 = make_identity_rigid(())
     >>> R2, t2 = make_identity_rigid(())
     >>> R_comp, t_comp = compose_rigids(R1, t1, R2, t2)
@@ -326,14 +367,42 @@ def compose_rigids(
 
 
 def _safe_sin_div_x(x: torch.Tensor) -> torch.Tensor:
-    """Return `sin(x) / x` with a stable Taylor branch near zero."""
+    """Return `sin(x) / x` with a stable Taylor branch near zero.
+
+    Used by `so3_exp_map` as the coefficient on the skew-symmetric term of
+    Rodrigues' formula, where `x` is the rotation angle `omega`.
+
+    Parameters
+    ----------
+    x : torch.Tensor
+        Input tensor, typically a batch of rotation angles.
+
+    Returns
+    -------
+    torch.Tensor
+        Elementwise `sin(x) / x`, same shape as `x`.
+    """
     small = x.abs() < _SMALL_OMEGA
     safe_x = torch.where(small, torch.ones_like(x), x)
     return torch.where(small, 1.0 - x * x / 6.0, torch.sin(safe_x) / safe_x)
 
 
 def _safe_one_minus_cos_div_x_sq(x: torch.Tensor) -> torch.Tensor:
-    """Return `(1 - cos(x)) / x^2` with a stable Taylor branch."""
+    """Return `(1 - cos(x)) / x^2` with a stable Taylor branch.
+
+    Used by `so3_exp_map` as the coefficient on the squared skew-symmetric
+    term of Rodrigues' formula, where `x` is the rotation angle `omega`.
+
+    Parameters
+    ----------
+    x : torch.Tensor
+        Input tensor, typically a batch of rotation angles.
+
+    Returns
+    -------
+    torch.Tensor
+        Elementwise `(1 - cos(x)) / x^2`, same shape as `x`.
+    """
     small = x.abs() < _SMALL_OMEGA
     safe_x = torch.where(small, torch.ones_like(x), x)
     closed = (1.0 - torch.cos(safe_x)) / (safe_x * safe_x)
