@@ -82,6 +82,11 @@ class RelativePositionEmbedding(nn.Module):
         Clip radius :math:`r_{\\max}`. Indices beyond this distance map
         to the same embedding bucket.
 
+    Raises
+    ------
+    ValueError
+        If `pair_dim` or `max_relative_position` is not positive.
+
     Examples
     --------
     >>> import torch
@@ -153,6 +158,11 @@ class OuterProductMean(nn.Module):
         Pair-track channel size :math:`C_z`.
     hidden_dim : int, default 32
         Projection size :math:`c_h` for the outer product.
+
+    Raises
+    ------
+    ValueError
+        If `embed_dim`, `pair_dim`, or `hidden_dim` is not positive.
 
     Notes
     -----
@@ -246,6 +256,11 @@ class TriangleMultiplicativeUpdate(nn.Module):
         b_{jk}`); otherwise use the incoming variant (sum over
         :math:`a_{ki} b_{kj}`).
 
+    Raises
+    ------
+    ValueError
+        If `pair_dim` or `hidden_dim` is not positive.
+
     Examples
     --------
     >>> import torch
@@ -294,6 +309,11 @@ class TriangleMultiplicativeUpdate(nn.Module):
         -------
         torch.Tensor
             Updated pair representation, same shape as input.
+
+        Raises
+        ------
+        ValueError
+            If `pair` is not 4D.
         """
         if pair.dim() != 4:
             raise ValueError(
@@ -309,7 +329,21 @@ class TriangleMultiplicativeUpdate(nn.Module):
 
     def _chunked_contract(self, a: torch.Tensor, b: torch.Tensor,
                           chunk_size: Optional[int]) -> torch.Tensor:
-        """Compute :math:`\\sum_k a_{*k} \\odot b_{*k}` chunked over ``i``."""
+        """Compute :math:`\\sum_k a_{*k} \\odot b_{*k}` chunked over ``i``.
+
+        Parameters
+        ----------
+        a, b : torch.Tensor
+            Gated projections of shape ``(B, L, L, hidden_dim)``.
+        chunk_size : int, optional
+            Chunk size for the ``i`` axis. If None or `>= L`, runs the
+            dense contraction in one call.
+
+        Returns
+        -------
+        torch.Tensor
+            Contracted tensor of shape ``(B, L, L, hidden_dim)``.
+        """
         seq_len = a.size(1)
         if chunk_size is None or chunk_size >= seq_len:
             if self.outgoing:
@@ -358,6 +392,11 @@ class TriangleAttention(nn.Module):
         Per-head channel size :math:`d_h`.
     starting_node : bool, default True
         Selects the starting-node (True) or ending-node (False) variant.
+
+    Raises
+    ------
+    ValueError
+        If `pair_dim`, `num_heads`, or `head_dim` is not positive.
 
     Examples
     --------
@@ -411,6 +450,11 @@ class TriangleAttention(nn.Module):
         -------
         torch.Tensor
             Updated pair representation, same shape as input.
+
+        Raises
+        ------
+        ValueError
+            If `pair` is not 4D.
         """
         if pair.dim() != 4:
             raise ValueError('pair must be 4D (B, L, L, C_z).')
@@ -450,6 +494,21 @@ class TriangleAttention(nn.Module):
         logits and attention weights are formed independently for each
         row :math:`i`, chunking along :math:`i` is exactly numerically
         equivalent to the dense path.
+
+        Parameters
+        ----------
+        q, k, v : torch.Tensor
+            Per-head queries/keys/values of shape ``(B, L, L, H, d)``.
+        bias : torch.Tensor
+            Pair bias of shape ``(B, L, L, H)``, indexed by ``(j, k)``.
+        chunk_size : int, optional
+            Row-chunk size. If None or `>= L`, runs the dense path in
+            one call to `_attend_block`.
+
+        Returns
+        -------
+        torch.Tensor
+            Attention output of shape ``(B, L, L, H * d)``.
         """
         seq_len = q.size(1)
         if chunk_size is None or chunk_size >= seq_len:
@@ -474,6 +533,11 @@ class TriangleAttention(nn.Module):
         bias : torch.Tensor
             Pair bias of shape ``(B, L, L, H)`` indexed by ``(j, k)``;
             broadcast across the row axis :math:`i`.
+
+        Returns
+        -------
+        torch.Tensor
+            Attention output of shape ``(B, L_i, L, H * d)``.
         """
         scale = 1.0 / math.sqrt(q.size(-1))
         logits = torch.einsum('bijhd,bikhd->bhijk', q, k) * scale
@@ -499,6 +563,11 @@ class PairTransition(nn.Module):
         Pair channel dimension.
     expansion : int, default 4
         Hidden expansion factor.
+
+    Raises
+    ------
+    ValueError
+        If `pair_dim` or `expansion` is not positive.
 
     Examples
     --------
