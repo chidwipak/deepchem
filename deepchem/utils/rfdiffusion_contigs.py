@@ -62,13 +62,37 @@ class LinkerSegment:
         Inclusive lower bound on the linker length.
     hi : int
         Inclusive upper bound on the linker length (``hi >= lo``).
+
+    Raises
+    ------
+    ValueError
+        If `lo` is negative or `hi < lo`.
+
+    Examples
+    --------
+    >>> from deepchem.utils.rfdiffusion_contigs import LinkerSegment
+    >>> seg = LinkerSegment(lo=5, hi=10)
+    >>> seg.lo, seg.hi
+    (5, 10)
     """
 
     lo: int
     hi: int
 
     def sample_length(self, rng: Optional[np.random.Generator] = None) -> int:
-        """Draw a length uniformly from [lo, hi]."""
+        """Draw a length uniformly from [lo, hi].
+
+        Parameters
+        ----------
+        rng : numpy.random.Generator, optional
+            Random number generator. A fresh default generator is used
+            if not given.
+
+        Returns
+        -------
+        int
+            Sampled length in `[lo, hi]` inclusive.
+        """
         if rng is None:
             rng = np.random.default_rng()
         return int(rng.integers(self.lo, self.hi + 1))
@@ -90,6 +114,18 @@ class MotifSegment:
         Inclusive start residue index (PDB numbering) in the reference.
     end : int
         Inclusive end residue index (PDB numbering) in the reference.
+
+    Raises
+    ------
+    ValueError
+        If `chain` is not a single letter, or if `end < start`.
+
+    Examples
+    --------
+    >>> from deepchem.utils.rfdiffusion_contigs import MotifSegment
+    >>> seg = MotifSegment(chain='A', start=12, end=30)
+    >>> seg.length
+    19
     """
 
     chain: str
@@ -120,12 +156,35 @@ class ContigMap:
     ----------
     segments : list of Segment
         Ordered list of motif and linker segments.
+
+    Examples
+    --------
+    >>> from deepchem.utils.rfdiffusion_contigs import (
+    ...     ContigMap, LinkerSegment, MotifSegment)
+    >>> cmap = ContigMap(segments=[
+    ...     LinkerSegment(lo=5, hi=10), MotifSegment(chain='A', start=12, end=30)])
+    >>> cmap.total_length_range()
+    (24, 29)
     """
 
     segments: List[Segment]
 
     def total_length_range(self) -> Tuple[int, int]:
-        """Return ``(min_total, max_total)`` for the chain length."""
+        """Return ``(min_total, max_total)`` for the chain length.
+
+        Returns
+        -------
+        tuple of int
+            ``(min_total, max_total)`` inclusive length bounds implied
+            by the segments' linker ranges and motif lengths.
+
+        Examples
+        --------
+        >>> from deepchem.utils.rfdiffusion_contigs import parse_contig_string
+        >>> cm = parse_contig_string('5-10/A12-30/5-10')
+        >>> cm.total_length_range()
+        (29, 39)
+        """
         lo = 0
         hi = 0
         for seg in self.segments:
@@ -151,6 +210,13 @@ class ContigMap:
         RealisedContig
             Concrete plan with sampled linker lengths and the implied
             mapping from generated positions to motif source residues.
+
+        Examples
+        --------
+        >>> from deepchem.utils.rfdiffusion_contigs import parse_contig_string
+        >>> cm = parse_contig_string('2-2/A1-2/2-2')
+        >>> cm.realise().total_length
+        6
         """
         if rng is None:
             rng = np.random.default_rng()
@@ -171,6 +237,14 @@ class RealisedContig:
     ----------
     layout : list of (Segment, int)
         Ordered list of ``(segment, realised_length)`` pairs.
+
+    Examples
+    --------
+    >>> from deepchem.utils.rfdiffusion_contigs import parse_contig_string
+    >>> cm = parse_contig_string('2-2/A1-2/2-2')
+    >>> realised = cm.realise()
+    >>> realised.total_length
+    6
     """
 
     layout: List[Tuple[Segment, int]]
@@ -187,6 +261,13 @@ class RealisedContig:
         -------
         numpy.ndarray
             Array of ``bool`` with ``True`` at motif residues.
+
+        Examples
+        --------
+        >>> from deepchem.utils.rfdiffusion_contigs import parse_contig_string
+        >>> cm = parse_contig_string('2-2/A1-2/2-2')
+        >>> cm.realise().motif_mask().tolist()
+        [False, False, True, True, False, False]
         """
         mask = np.zeros(self.total_length, dtype=bool)
         cursor = 0
@@ -204,6 +285,13 @@ class RealisedContig:
         list of (str, int) or None
             ``None`` for sampled-linker residues; ``(chain, idx)`` for
             motif residues. Length matches ``total_length``.
+
+        Examples
+        --------
+        >>> from deepchem.utils.rfdiffusion_contigs import parse_contig_string
+        >>> cm = parse_contig_string('2-2/A1-2/2-2')
+        >>> cm.realise().motif_source_index()
+        [None, None, ('A', 1), ('A', 2), None, None]
         """
         sources: List[Optional[Tuple[str, int]]] = []
         for seg, length in self.layout:
@@ -241,6 +329,7 @@ def parse_contig_string(text: str) -> ContigMap:
 
     Examples
     --------
+    >>> from deepchem.utils.rfdiffusion_contigs import parse_contig_string
     >>> cm = parse_contig_string('5-10/A12-30/5-10')
     >>> cm.total_length_range()
     (29, 39)
@@ -467,6 +556,15 @@ def fixed_layout(motif_lengths: Sequence[int],
     -------
     RealisedContig
         Deterministic realised contig.
+
+    Examples
+    --------
+    >>> from deepchem.utils.rfdiffusion_contigs import fixed_layout
+    >>> realised = fixed_layout(motif_lengths=[5], linker_lengths=[3, 3])
+    >>> realised.total_length
+    11
+    >>> realised.motif_mask().tolist()
+    [False, False, False, True, True, True, True, True, False, False, False]
     """
     if len(linker_lengths) != len(motif_lengths) + 1:
         raise ValueError(
