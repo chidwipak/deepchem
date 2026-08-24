@@ -223,6 +223,24 @@ class RFDiffusionMultiTrackDenoiser(nn.Module):
         pred_translations : torch.Tensor
             Predicted denoised translations, shape ``(batch, num_residues,
             3)``.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from deepchem.models.torch_models.rfdiffusion_multitrack import (
+        ...     RFDiffusionMultiTrackDenoiser)
+        >>> denoiser = RFDiffusionMultiTrackDenoiser(
+        ...     embed_dim=32, pair_dim=16, num_blocks=1, num_heads=4,
+        ...     pair_num_heads=2)
+        >>> noisy_coords = torch.randn(2, 6, 9)
+        >>> rotations = torch.eye(3).expand(2, 6, 3, 3).contiguous()
+        >>> translations = torch.zeros(2, 6, 3)
+        >>> t = torch.tensor([3, 7])
+        >>> mask = torch.ones(2, 6)
+        >>> pred_r, pred_t = denoiser.forward(
+        ...     [noisy_coords, rotations, translations, t, mask])
+        >>> pred_r.shape, pred_t.shape
+        (torch.Size([2, 6, 3, 3]), torch.Size([2, 6, 3]))
         """
         noisy_coords, rotations, translations, t, mask = inputs
         t = t.long()
@@ -283,6 +301,11 @@ def sample_noisy_frames(
         Shape ``(batch, num_residues, 3, 3)``.
     noisy_translations : torch.Tensor
         Shape ``(batch, num_residues, 3)``.
+
+    Raises
+    ------
+    ValueError
+        If `rotations0` and `t` do not share the same batch size.
 
     Examples
     --------
@@ -357,6 +380,11 @@ def translation_posterior_step(
     torch.Tensor
         Translations at timestep ``t - 1``, same shape as ``x_t``.
 
+    Raises
+    ------
+    ValueError
+        If `t` is negative.
+
     Examples
     --------
     >>> import torch
@@ -422,6 +450,11 @@ def so3_x0_reverse_step(
     -------
     torch.Tensor
         Rotations at timestep ``t - 1``, same shape as ``rotations_t``.
+
+    Raises
+    ------
+    ValueError
+        If `t` is not positive.
 
     Examples
     --------

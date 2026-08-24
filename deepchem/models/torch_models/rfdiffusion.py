@@ -185,6 +185,13 @@ class RFDiffusionModel(TorchModel):
     **kwargs
         Additional keyword arguments forwarded to ``TorchModel``.
 
+    Raises
+    ------
+    ValueError
+        If `embed_dim`, `time_dim`, `num_layers`, `num_heads`,
+        `num_diffusion_steps`, or `max_seq_len` is not positive, or if
+        `architecture` is not `'transformer'` or `'multitrack'`.
+
     Examples
     --------
     >>> import numpy as np
