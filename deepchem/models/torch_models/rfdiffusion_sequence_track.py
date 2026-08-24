@@ -86,6 +86,13 @@ class PairBiasedSingleAttention(nn.Module):
     dropout : float, default 0.0
         Dropout probability applied to attention weights.
 
+    Raises
+    ------
+    ValueError
+        If `embed_dim`, `pair_dim`, or `num_heads` is not positive, if
+        `embed_dim` is not divisible by `num_heads`, or if `dropout` is
+        not in `[0, 1)`.
+
     Examples
     --------
     >>> import torch
@@ -146,6 +153,11 @@ class PairBiasedSingleAttention(nn.Module):
         -------
         torch.Tensor
             Updated single representation, same shape as input.
+
+        Raises
+        ------
+        ValueError
+            If `single` is not 3D or `pair` is not 4D.
         """
         if single.dim() != 3:
             raise ValueError('single must be 3D (B, L, C_s).')
@@ -202,6 +214,12 @@ class SingleTransition(nn.Module):
         Hidden expansion of the MLP.
     dropout : float, default 0.0
         Dropout probability applied to the MLP hidden activations.
+
+    Raises
+    ------
+    ValueError
+        If `embed_dim` or `expansion` is not positive, or if `dropout`
+        is not in `[0, 1)`.
 
     Examples
     --------
@@ -346,6 +364,11 @@ class BackboneUpdate(nn.Module):
     ----------
     embed_dim : int
         Single-track channel size :math:`C_s`.
+
+    Raises
+    ------
+    ValueError
+        If `embed_dim` is not positive.
 
     Examples
     --------
@@ -641,6 +664,11 @@ class RFDiffusionMultiTrackStack(nn.Module):
     num_v_points : int, default 8
         IPA value 3-D point count.
 
+    Raises
+    ------
+    ValueError
+        If `num_blocks` is not positive.
+
     Examples
     --------
     >>> import torch
@@ -759,6 +787,12 @@ class RFDiffusionMultiTrackStack(nn.Module):
         -------
         Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
             Final ``(single, pair, rotations, translations)``.
+
+        Raises
+        ------
+        ValueError
+            If `single` is not 3D, its last dimension doesn't match
+            `embed_dim`, or `t_emb`/`attention_mask` have the wrong shape.
         """
         if single.dim() != 3:
             raise ValueError('single must be 3D (B, L, C_s).')
