@@ -260,6 +260,12 @@ def log_beta_schedule(num_steps: int,
     torch.Tensor
         Schedule tensor of shape ``(num_steps,)`` containing sigma_t values.
 
+    Raises
+    ------
+    ValueError
+        If `num_steps < 2` or `beta_min`/`beta_max` are not `0 < beta_min
+        < beta_max`.
+
     Examples
     --------
     >>> import torch
@@ -307,6 +313,12 @@ class IGSO3:
     cache : bool, default True
         If ``True`` precompute and cache the discretised PDF / CDF for
         each sigma in ``sigmas``.
+
+    Raises
+    ------
+    ValueError
+        If `sigmas` is not 1-D or not strictly positive, if `num_omega
+        < 64`, or if `lmax < 1`.
 
     Examples
     --------
@@ -408,6 +420,22 @@ class IGSO3:
         backward call, since independent leaves have no cross-row terms
         to sum over. This is the same closed-form formula as
         ``_f_omega``, just batched over sigma instead of looped.
+
+        Parameters
+        ----------
+        omega : torch.Tensor
+            Tensor of shape ``(N,)`` containing rotation angles omega.
+        sigma : torch.Tensor
+            Tensor of shape ``(M,)`` containing sigma values.
+        lmax : int
+            Truncation degree of the series.
+        chunk_size : int, default 32
+            Number of sigma rows processed per backward call.
+
+        Returns
+        -------
+        torch.Tensor
+            Tensor of shape ``(M, N)`` with domega log f(omega_n; sigma_m).
         """
         num_sigma = sigma.shape[0]
         l_values = torch.arange(lmax + 1, device=omega.device)[None, None, :]
@@ -465,7 +493,20 @@ class IGSO3:
         return self._interp(omega, self._pdf[sigma_index])
 
     def cdf(self, omega: torch.Tensor, sigma_index: int) -> torch.Tensor:
-        """Interpolate the cached CDF at the supplied angles."""
+        """Interpolate the cached CDF at the supplied angles.
+
+        Parameters
+        ----------
+        omega : torch.Tensor
+            Tensor of angles omega in (0, pi) of arbitrary shape.
+        sigma_index : int
+            Index of sigma in ``self.sigmas`` whose CDF to evaluate.
+
+        Returns
+        -------
+        torch.Tensor
+            CDF evaluated at the supplied angles.
+        """
         if self._cdf is None:
             self._compute_tables()
         assert self._cdf is not None
@@ -478,6 +519,18 @@ class IGSO3:
         so(3); the score is then approximately -omega / sigma^2. The cached
         table already encodes this limit, so no special branch is
         required at query time.
+
+        Parameters
+        ----------
+        omega : torch.Tensor
+            Tensor of angles omega in (0, pi) of arbitrary shape.
+        sigma_index : int
+            Index of sigma in ``self.sigmas`` whose score to evaluate.
+
+        Returns
+        -------
+        torch.Tensor
+            Score s(omega; sigma) evaluated at the supplied angles.
         """
         if self._score is None:
             self._compute_tables()
@@ -485,7 +538,22 @@ class IGSO3:
         return self._interp(omega, self._score[sigma_index])
 
     def _interp(self, omega: torch.Tensor, table: torch.Tensor) -> torch.Tensor:
-        """Linear interpolation of a 1-D cached table on the omega grid."""
+        """Linear interpolation of a 1-D cached table on the omega grid.
+
+        Parameters
+        ----------
+        omega : torch.Tensor
+            Query angles, arbitrary shape, on any device/dtype.
+        table : torch.Tensor
+            1-D cached table of shape ``(num_omega,)`` (e.g. `self._pdf`,
+            `self._cdf`, or `self._score`, indexed by sigma) to interpolate.
+
+        Returns
+        -------
+        torch.Tensor
+            Interpolated values, same shape as `omega`, on `omega`'s
+            original device.
+        """
         original_device = omega.device
         # The cached tables are float64 for interpolation accuracy, but
         # some backends (e.g. Apple's MPS) do not support float64 tensors
@@ -513,7 +581,22 @@ class IGSO3:
             sigma_index: int,
             shape: Tuple[int, ...],
             generator: Optional[torch.Generator] = None) -> torch.Tensor:
-        """Sample rotation angles omega from IGSO(3) by inverse CDF."""
+        """Sample rotation angles omega from IGSO(3) by inverse CDF.
+
+        Parameters
+        ----------
+        sigma_index : int
+            Index of sigma in ``self.sigmas``.
+        shape : tuple of int
+            Output batch shape for the sampled angles.
+        generator : torch.Generator, optional
+            PyTorch random generator for reproducibility.
+
+        Returns
+        -------
+        torch.Tensor
+            Sampled angles omega of shape ``shape``, in ``torch.float64``.
+        """
         if self._cdf is None:
             self._compute_tables()
         assert self._cdf is not None
@@ -567,6 +650,17 @@ class IGSO3:
 
         This mirrors the upstream RFdiffusion Riemann-sum check; the
         table is not renormalised after truncation.
+
+        Parameters
+        ----------
+        sigma_index : int
+            Index of sigma in ``self.sigmas`` to check.
+
+        Returns
+        -------
+        float
+            Absolute deviation of the cached PDF's Riemann sum from 1.
+            Should be small for a well-resolved grid (see `num_omega`).
         """
         if self._pdf is None:
             self._compute_tables()
@@ -616,6 +710,12 @@ def so3_reverse_step(rotations: torch.Tensor,
     -------
     torch.Tensor
         Updated rotation matrices of shape ``(..., 3, 3)``.
+
+    Raises
+    ------
+    ValueError
+        If `sigma_t` or `sigma_t_minus_1` is not strictly positive, or
+        if `sigma_t_minus_1 >= sigma_t`.
 
     Examples
     --------
