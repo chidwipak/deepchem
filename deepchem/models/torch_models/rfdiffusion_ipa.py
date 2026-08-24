@@ -223,6 +223,20 @@ class InvariantPointAttention(nn.Module):
         ------
         ValueError
             On shape or consistency mismatches.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from deepchem.models.torch_models.rfdiffusion_ipa import (
+        ...     InvariantPointAttention)
+        >>> from deepchem.models.torch_models.rfdiffusion_frames import (
+        ...     build_backbone_frames)
+        >>> backbone = torch.randn(2, 5, 3, 3)
+        >>> R, t = build_backbone_frames(backbone)
+        >>> layer = InvariantPointAttention(embed_dim=16, num_heads=4)
+        >>> out = layer.forward(torch.randn(2, 5, 16), R, t)
+        >>> tuple(out.shape)
+        (2, 5, 16)
         """
         if single_repr.dim() != 3:
             raise ValueError(
